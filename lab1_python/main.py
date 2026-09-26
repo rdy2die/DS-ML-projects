@@ -1,107 +1,161 @@
-import csv
-import sys
+"""Точка входа: диалог с пользователем.
 
-from errors import (
-    AppError,
-    DatasetContentError,
-    EmptyResultError,
+Вся арифметика — в stats_logic, всё чтение и печать таблицы — в io_layer.
+Здесь только вопросы пользователю и вывод готовых результатов.
+"""
+
+from errors import AppError
+from io_layer import REGION_COLUMN, print_rows_table, read_dataset
+from stats_logic import (
+    collect_regions,
+    create_table,
+    extract_values,
+    filter_by_region,
+    get_average,
+    get_max,
+    get_median,
+    get_min,
 )
-from io_layer import print_rows_table, validate_file
-from stats_logic import create_table, get_average, get_max, get_median, get_min
+
+PRECISION = 2
+MENU_START_INDEX = 1
+EXIT_COMMAND = "exit"
+YES_ANSWERS = ("y", "yes")
+NO_ANSWERS = ("n", "no")
+EXIT_MESSAGE = "Работа программы завершена."
+
+
+def format_number(value):
+    return f"{value:.{PRECISION}f}"
+
+
+def ask_dataset():
+    """Спрашивать путь, пока не прочитается корректный файл.
+
+    Возвращает (строки, колонки) или None, если пользователь ввёл exit.
+    """
+    while True:
+        path = input(
+            f"Введите путь до файла (или '{EXIT_COMMAND}' для выхода): "
+        ).strip()
+        if path.lower() == EXIT_COMMAND:
+            return None
+        try:
+            return read_dataset(path)
+        except AppError as error:
+            print(f"Ошибка: {error}")
+
+
+def choose_from_list(title, options, what):
+    """Выбор пункта по номеру (ID) или по названию.
+
+    Возвращает выбранное значение или None, если пользователь ввёл exit.
+    """
+    print(f"\n{title}\n")
+    for index, option in enumerate(options, start=MENU_START_INDEX):
+        print(f"{index}. {option}")
+
+    while True:
+        answer = input(
+            f"\nВведите {what} — номер или название (или '{EXIT_COMMAND}' для выхода): "
+        ).strip()
+
+        if answer.lower() == EXIT_COMMAND:
+            return None
+
+        if answer.isdigit():
+            number = int(answer)
+            if MENU_START_INDEX <= number < MENU_START_INDEX + len(options):
+                return options[number - MENU_START_INDEX]
+            print(
+                f"Ошибка: номера {number} нет в списке. "
+                f"Допустимо от {MENU_START_INDEX} "
+                f"до {len(options)}. Попробуйте снова."
+            )
+            continue
+
+        if answer in options:
+            return answer
+
+        print(f"Ошибка: {what} '{answer}' не найдена. Попробуйте снова.")
+
+
+def ask_continue():
+    while True:
+        answer = input("\nХотите продолжить? (y/n): ").strip().lower()
+        if answer in YES_ANSWERS:
+            return True
+        if answer in NO_ANSWERS:
+            return False
+        print("Некорректный ввод. Введите 'y' или 'n'.")
+
+
+def print_statistics(values):
+    print(f"\nМаксимум: {format_number(get_max(values))}")
+    print(f"Минимум: {format_number(get_min(values))}")
+    print(f"Среднее: {format_number(get_average(values))}")
+    print(f"Медиана: {format_number(get_median(values))}")
+
+    print("\nПерцентили:")
+    for percent, value in create_table(values):
+        print(f"{percent}%: {format_number(value)}")
 
 
 def main():
+    dataset = ask_dataset()
+    if dataset is None:
+        print(EXIT_MESSAGE)
+        return
+
+    all_rows, columns = dataset
+    regions = collect_regions(all_rows, REGION_COLUMN)
+    numeric_columns = [c for c in columns if c != REGION_COLUMN]
+
+    if not regions:
+        print(f"Ошибка: в колонке '{REGION_COLUMN}' нет значений.")
+        return
+    if not numeric_columns:
+        print("Ошибка: кроме региона в файле нет ни одной колонки.")
+        return
+
     while True:
-        path = input("Введите путь до файла: ").strip()
+        region = choose_from_list("Выберите регион из списка:", regions, "регион")
+        if region is None:
+            print(EXIT_MESSAGE)
+            return
+
+        metric = choose_from_list(
+            "Выберите метрику из списка:", numeric_columns, "метрику"
+        )
+        if metric is None:
+            print(EXIT_MESSAGE)
+            return
+
+        region_rows = filter_by_region(all_rows, REGION_COLUMN, region)
+
         try:
-            validate_file(path)
-            with open(path, encoding="utf-8") as csvfile:
-                reader = csv.DictReader(csvfile)
-                all_rows = list(reader)
-                columns = reader.fieldnames
-            if not columns or "region" not in columns:
-                raise DatasetContentError("В файле нет обязательной колонки 'region'.")
-            if not all_rows:
-                raise DatasetContentError("Файл не содержит строк с данными.")
-            break
+            values, skipped = extract_values(region_rows, metric)
         except AppError as error:
-            print(f"Ошибка: {error}")
-        except (OSError, UnicodeDecodeError) as error:
-            print(f"Ошибка при чтении файла: {error}")
-
-    regions = {row["region"] for row in all_rows if row["region"]}
-    sorted_regions = sorted(regions)
-    numeric_columns = [c for c in columns if c != "region"]
-
-    while True:
-        print("\nВыберите регион из списка:\n")
-        for i, r in enumerate(sorted_regions, start=1):
-            print(f"{i}. {r}")
-
-        while True:
-            input_region = input("\nВведите регион (или 'exit' для выхода): ").strip()
-            if input_region.lower() == "exit":
-                sys.exit("Работа программы завершена.")
-            if input_region in regions:
-                region = input_region
-                break
-            print(f"Ошибка: регион '{input_region}' не найден. Попробуйте снова.")
-
-        region_rows = [row for row in all_rows if row["region"] == region]
-
-        print("\nВыберите метрику из списка:\n")
-        for i, c in enumerate(numeric_columns, start=1):
-            print(f"{i}. {c}")
-
-        while True:
-            input_metric = input("\nВведите метрику (или 'exit' для выхода): ").strip()
-            if input_metric.lower() == "exit":
-                sys.exit("Работа программы завершена.")
-            if input_metric in numeric_columns:
-                metric = input_metric
-                break
-            print(f"Ошибка: метрика '{input_metric}' не найдена. Попробуйте снова.")
-
-        values = []
-        skipped = 0
-        for row in region_rows:
-            try:
-                values.append(float(row[metric]))
-            except (ValueError, TypeError):
-                skipped += 1
+            print(f"\nОшибка: по региону '{region}' — {error}")
+            if not ask_continue():
+                print(EXIT_MESSAGE)
+                return
+            continue
 
         if skipped:
-            print(f"Предупреждение: пропущено {skipped} некорректных значений.")
-
-        try:
-            if not values:
-                raise EmptyResultError(
-                    f"По региону '{region}' и метрике '{metric}' нет числовых данных."
-                )
-        except EmptyResultError as error:
-            print(f"Ошибка: {error}")
-            continue
+            print(f"\nПредупреждение: пропущено {skipped} некорректных значений.")
 
         print()
         print_rows_table(region_rows, columns)
+        print_statistics(values)
 
-        print(f"\nМаксимум: {get_max(values):.2f}")
-        print(f"Минимум: {get_min(values):.2f}")
-        print(f"Среднее: {get_average(values):.2f}")
-        print(f"Медиана: {get_median(values):.2f}")
+        if not ask_continue():
+            print(EXIT_MESSAGE)
+            return
 
-        print("\nПерцентили:")
-        for percent, value in create_table(values):
-            print(f"{percent}%: {value:.2f}")
-
-        while True:
-            answer = input("\nХотите продолжить? (y/n): ").strip().lower()
-            if answer in ("y", "yes"):
-                break
-            elif answer in ("n", "no"):
-                sys.exit("Работа программы завершена.")
-            else:
-                print("Некорректный ввод. Введите 'y' или 'n'.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{EXIT_MESSAGE}")

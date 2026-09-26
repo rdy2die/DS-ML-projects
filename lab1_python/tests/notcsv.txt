@@ -1,0 +1,2 @@
+year,region,value
+1990,Adygea,1.5
