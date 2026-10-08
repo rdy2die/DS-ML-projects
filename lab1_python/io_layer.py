@@ -6,7 +6,18 @@
 import csv
 import os
 
-from errors import DatasetContentError, DatasetFileError
+from errors import (
+    DatasetNotFoundError,
+    EmptyFileError,
+    EmptyPathError,
+    FileEncodingError,
+    FileReadError,
+    FileTooLargeError,
+    MissingColumnError,
+    NoDataRowsError,
+    NotAFileError,
+    WrongExtensionError,
+)
 
 BYTES_IN_KB = 1024
 BYTES_IN_MB = BYTES_IN_KB * BYTES_IN_KB
@@ -23,22 +34,28 @@ COLUMN_SEPARATOR = " | "
 
 
 def validate_file(path):
-    """Проверки до открытия файла."""
+    """Проверки до открытия файла. Каждая причина — своё исключение."""
     if not path:
-        raise DatasetFileError("Путь до файла не может быть пустым.")
+        raise EmptyPathError("путь до файла не может быть пустым.")
+
     if not os.path.exists(path):
-        raise DatasetFileError(f"Файл '{path}' не найден.")
+        raise DatasetNotFoundError(f"файл '{path}' не найден.")
+
     if not os.path.isfile(path):
-        raise DatasetFileError(f"'{path}' — это не файл.")
+        raise NotAFileError(f"'{path}' — это не файл, а папка или устройство.")
+
     if not path.lower().endswith(CSV_EXTENSION):
-        raise DatasetFileError(f"Ожидается файл с расширением {CSV_EXTENSION}.")
+        raise WrongExtensionError(
+            f"ожидается файл с расширением {CSV_EXTENSION}, "
+            f"а у '{os.path.basename(path)}' другое."
+        )
 
     size = os.path.getsize(path)
     if size == 0:
-        raise DatasetFileError("Файл пустой — в нём нет данных.")
+        raise EmptyFileError(f"файл '{os.path.basename(path)}' пустой (0 байт).")
     if size > MAX_FILE_SIZE_BYTES:
-        raise DatasetFileError(
-            f"Файл слишком большой ({size // BYTES_IN_MB} МБ). "
+        raise FileTooLargeError(
+            f"файл слишком большой ({size // BYTES_IN_MB} МБ). "
             f"Максимум — {MAX_FILE_SIZE_MB} МБ."
         )
 
@@ -46,8 +63,8 @@ def validate_file(path):
 def read_dataset(path):
     """Прочитать CSV и вернуть (строки, колонки).
 
-    Все ошибки файла и содержимого приводятся к AppError-наследникам,
-    чтобы вызывающий код не разбирался с OSError и UnicodeDecodeError.
+    Системные исключения приводятся к доменным, чтобы вызывающий код
+    не разбирался с OSError и UnicodeDecodeError напрямую.
     """
     validate_file(path)
 
@@ -56,17 +73,29 @@ def read_dataset(path):
             reader = csv.DictReader(csvfile)
             rows = list(reader)
             columns = reader.fieldnames
-    except UnicodeDecodeError:
-        raise DatasetFileError("Файл не читается: ожидается кодировка UTF-8.") from None
+    except UnicodeDecodeError as error:
+        raise FileEncodingError(
+            f"файл не в кодировке UTF-8 — не удалось прочитать байт "
+            f"в позиции {error.start}. Пересохраните файл в UTF-8."
+        ) from None
+    except PermissionError:
+        raise FileReadError(f"нет прав на чтение файла '{path}'.") from None
     except OSError as error:
-        raise DatasetFileError(f"Не удалось прочитать файл: {error}") from None
+        raise FileReadError(
+            f"не удалось прочитать файл: {error.strerror or error}."
+        ) from None
 
-    if not columns or REGION_COLUMN not in columns:
-        raise DatasetContentError(
-            f"В файле нет обязательной колонки '{REGION_COLUMN}'."
+    if not columns:
+        raise MissingColumnError("в файле нет строки заголовка с названиями колонок.")
+    if REGION_COLUMN not in columns:
+        raise MissingColumnError(
+            f"в файле нет обязательной колонки '{REGION_COLUMN}'. "
+            f"Найдены колонки: {', '.join(columns)}."
         )
     if not rows:
-        raise DatasetContentError("Файл не содержит строк с данными.")
+        raise NoDataRowsError(
+            "в файле есть только заголовок, ни одной строки с данными."
+        )
 
     return rows, columns
 

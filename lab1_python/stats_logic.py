@@ -81,5 +81,7 @@ def extract_values(rows, column):
         except (ValueError, TypeError):
             skipped += 1
     if not values:
-        raise EmptyResultError(f"В колонке '{column}' нет числовых данных.")
+        raise EmptyResultError(
+            f"в колонке '{column}' нет ни одного числового значения."
+        )
     return values, skipped
